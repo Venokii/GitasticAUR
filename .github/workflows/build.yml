@@ -1,0 +1,62 @@
+name: Build AUR Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Name of the AUR package to build'
+        required: true
+        default: 'brave-bin'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    env:
+      GH_PAGES_BRANCH: gh-pages
+      REPO_DIR: repo/x86_64
+
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Sy --noconfirm
+          pacman -S --noconfirm git base-devel sudo
+
+      - name: Setup builder user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+      - name: Clone AUR package and build
+        run: |
+          sudo -u builder bash -c "
+            cd /home/builder
+            git clone https://aur.archlinux.org/${{ github.event.inputs.package }}.git
+            cd ${{ github.event.inputs.package }}
+            makepkg -s --noconfirm --skippgpcheck
+          "
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ env.GH_PAGES_BRANCH }}
+
+      - name: Copy package and update repo DB
+        run: |
+          mkdir -p $REPO_DIR
+          cp /home/builder/${{ github.event.inputs.package }}/*.pkg.tar.zst $REPO_DIR/
+          repo-add $REPO_DIR/gitasticaur.db.tar.gz $REPO_DIR/*.pkg.tar.zst
+
+      - name: Commit and push updated repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add $REPO_DIR
+          git commit -m "Add/update package ${{ github.event.inputs.package }} $(date --iso-8601=seconds)" || echo "No changes to commit"
+          git push origin ${{ env.GH_PAGES_BRANCH }}
+
+      - name: Output package URL
+        run: |
+          echo "Package available at: https://$GITHUB_REPOSITORY.github.io/$REPO_DIR/$(basename /home/builder/${{ github.event.inputs.package }}/*.pkg.tar.zst)"
